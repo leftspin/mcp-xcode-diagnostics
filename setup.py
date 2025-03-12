@@ -19,7 +19,7 @@ setup(
     author="Mike R. Manzano",
     author_email="mike@clicketyclacks.co",
     url="https://github.com/leftspin/mcp-xcode-diagnostics",
-    py_modules=["xcode_diagnostics"],  # Simple module, not a package
+    packages=find_packages(),  # Finds packages with __init__.py files
     install_requires=requirements,
     classifiers=[
         "Programming Language :: Python :: 3",

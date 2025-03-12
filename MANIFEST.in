@@ -4,3 +4,4 @@ include requirements.txt
 include plugin.json
 include manifest.json
 include test_data/sample_xcode_log.txt
+recursive-include xcode_diagnostics *
