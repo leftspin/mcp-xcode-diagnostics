@@ -1,0 +1,45 @@
+SwiftCompile normal arm64 /Users/developer/TestApp/AppDelegate.swift
+    cd /Users/developer/TestApp
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift -frontend -c -primary-file
+    
+/* ===== Sample Xcode diagnostics for testing ===== */
+
+/Users/developer/TestApp/AppDelegate.swift:15:10: error: missing required module 'UIKit'
+import UIKit
+       ^
+
+/Users/developer/TestApp/AppDelegate.swift:25:18: error: use of unresolved identifier 'AppConfiguration'
+        let config = AppConfiguration()
+                     ^~~~~~~~~~~~~~~~
+/Users/developer/TestApp/AppDelegate.swift:25:18: note: did you mean 'URLSessionConfiguration'?
+        let config = AppConfiguration()
+                     ^~~~~~~~~~~~~~~~
+                     URLSessionConfiguration
+
+/Users/developer/TestApp/ViewController.swift:32:21: warning: implicit conversion loses integer precision: 'Int' to 'Int16'
+    let smallValue: Int16 = bigValue
+                    ^        ~~~~~~~
+
+/Users/developer/TestApp/ViewController.swift:42:10: warning: result of call to 'loadView()' is unused
+        self.loadView()
+        ^~~~~~~~~~~~
+
+/Users/developer/TestApp/ViewController.swift:48:27: warning: string interpolation produces a debug description for an optional value; did you mean to make this explicit?
+        print("User name: \(user.name)")
+                          ^~~~~~~~~~~
+
+/Users/developer/TestApp/ViewController.swift:53:14: error: value of type 'UIView' has no member 'setText'
+        myView.setText("Hello World")
+        ~~~~~~ ^~~~~~~
+
+/Users/developer/TestApp/Models/User.swift:45:18: error: property 'name' with type 'String' cannot be used in a generic context expecting 'Int'
+    return compare(user.name, 42)
+                 ^~~~~~~~~~
+
+/Users/developer/TestApp/Services/NetworkManager.swift:112:40: warning: initialization of immutable value 'response' was never used
+        let data = responseData, let response = httpResponse {
+                                       ^~~~~~~~
+
+/Users/developer/TestApp/Services/NetworkManager.swift:122:22: error: cannot convert value of type 'String' to expected argument type 'URL'
+        let task = session.dataTask(with: "https://api.example.com")
+                                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~

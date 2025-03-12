@@ -1,0 +1,16 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Xcode Diagnostics",
+  "name_for_model": "xcode_diagnostics",
+  "description_for_human": "Extracts and parses Xcode build errors and warnings from DerivedData logs.",
+  "description_for_model": "Helps analyze and extract Xcode build errors and warnings from DerivedData logs. Can list available projects and parse structured diagnostic information from build logs.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "function"
+  },
+  "logo_url": "https://developer.apple.com/assets/elements/icons/xcode-12/xcode-12-96x96.png",
+  "contact_email": "mike@clicketyclacks.co",
+  "legal_info_url": "https://github.com/clicketyclacks/mcp-xcode-diagnostics/blob/main/LICENSE"
+}

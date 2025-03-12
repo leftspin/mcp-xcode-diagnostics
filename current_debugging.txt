@@ -1,0 +1,42 @@
+XCODE DIAGNOSTICS MCP PLUGIN DEBUGGING NOTES
+
+ISSUE: The plugin is not reporting all diagnostic errors from Xcode build logs.
+
+CURRENT STATUS:
+- FIXED: Successfully enhanced the plugin to capture concurrency-related warnings
+- Added more generic, project-independent regex patterns to detect warnings
+- Removed hardcoded project-specific warnings in the code
+- Added additional debug logging for concurrency-related warnings
+- Tests pass successfully
+
+CHANGES MADE:
+1. Improved regex patterns for concurrency-related warnings:
+   - Added patterns for Swift 6 language mode issues
+   - Added patterns for 'nonisolated global shared' warnings
+   - Created more general pattern matching for concurrency safety warnings
+
+2. Added debug logging to track detected concurrency warnings:
+   - Logs now show which concurrency-related terms were found
+   - Added context extraction for debugging concurrency issues
+
+3. Enhanced search capabilities:
+   - Added grep-based search specifically for concurrency warnings
+   - Search results are now included in the debug_info output
+
+4. Improved test suite:
+   - Removed references to removed functionality
+   - Tests now pass with the enhanced patterns
+
+TESTING:
+The modified plugin successfully captures the following types of warnings:
+- Static property concurrency warnings (e.g., 'activityIdentifier')
+- Main actor isolation warnings
+- Actor-isolated instance method warnings
+- Other Swift 6 language mode concurrency warnings
+
+Run the following to test:
+python3 -c "import xcode_diagnostics; import json; print(json.dumps(json.loads(xcode_diagnostics.get_project_diagnostics('Evokara-gqiejhyaqhlpmpbdgcgnfsdqqwcb')), indent=2))"
+
+Check debug logs in:
+- /tmp/xcode-mcp-debug.log
+- /tmp/xcode-diagnostic-raw.log

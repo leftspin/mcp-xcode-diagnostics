@@ -1,0 +1,2 @@
+# Required for running as an MCP server
+mcp>=1.2.0; platform_system=="Darwin"
