@@ -18,7 +18,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Mike R. Manzano",
     author_email="mike@clicketyclacks.co",
-    url="https://github.com/clicketyclacks/mcp-xcode-diagnostics",
+    url="https://github.com/leftspin/mcp-xcode-diagnostics",
     py_modules=["xcode_diagnostics"],  # Simple module, not a package
     install_requires=requirements,
     classifiers=[

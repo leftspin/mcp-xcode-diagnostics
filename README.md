@@ -27,7 +27,7 @@ pip install mcp-xcode-diagnostics
 You can install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/clicketyclacks/mcp-xcode-diagnostics.git
+pip install git+https://github.com/leftspin/mcp-xcode-diagnostics.git
 ```
 
 ### Installing from source
