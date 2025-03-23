@@ -546,6 +546,35 @@ class XcodeDiagnostics:
                                         logger.debug(f"Found backup concurrency warning: {file_path}:{line_number}")
                                         logger.debug(f"Message: {message}")
                                         logger.debug(f"Original line: {line}")
+                                    else:
+                                        # Generic fallback patterns for any errors/warnings that don't match our specific patterns
+                                        # These will capture errors like "error: Multiple commands produce ..." without requiring file:line format
+                                        fallback_error_pattern = r'^error: (.+)'
+                                        fallback_warning_pattern = r'^warning: (.+)'
+                                        
+                                        fallback_error_match = re.search(fallback_error_pattern, line)
+                                        if fallback_error_match:
+                                            file_path = "unknown"  # No file path in this format
+                                            line_number = 0        # No line number
+                                            column = 0             # No column
+                                            issue_type = "error"
+                                            message = fallback_error_match.group(1).strip()
+                                            match = True
+                                            
+                                            logger.debug(f"Found generic error: {message}")
+                                            logger.debug(f"Original line: {line}")
+                                        else:
+                                            fallback_warning_match = re.search(fallback_warning_pattern, line)
+                                            if fallback_warning_match:
+                                                file_path = "unknown"  # No file path in this format
+                                                line_number = 0        # No line number
+                                                column = 0             # No column
+                                                issue_type = "warning"
+                                                message = fallback_warning_match.group(1).strip()
+                                                match = True
+                                                
+                                                logger.debug(f"Found generic warning: {message}")
+                                                logger.debug(f"Original line: {line}")
                     
                 if match:
                     # For standard pattern

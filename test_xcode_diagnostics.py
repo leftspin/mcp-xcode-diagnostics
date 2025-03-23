@@ -386,6 +386,50 @@ import UIKit
             # Note: this is not required to pass the test, as it depends on how the diagnostics are structured
             if found_getter_note:
                 self.assertTrue(found_getter_note, "Found the 'previous definition' note")
+                
+    def test_generic_error_detection(self):
+        """Test detection of generic error formats like 'Multiple commands produce'."""
+        # Create an instance with our test directory
+        diagnostics = XcodeDiagnostics()
+        diagnostics.derived_data_path = self.derived_data_path
+        
+        # Create a mock log file
+        sample_log_path = os.path.join(self.project1_path, "Logs", "Build", "generic_error.xcactivitylog")
+        Path(sample_log_path).touch()
+        
+        # Create mock error data with the 'Multiple commands produce' format
+        mock_error_data = """
+SwiftCompile normal arm64 /Users/mike/Library/Developer/Xcode/DerivedData/Pantheon/Build/Intermediates.noindex/Pantheon.build
+    cd /Users/mike/src/Pantheon
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
+
+error: Multiple commands produce '/Users/mike/Library/Developer/Xcode/DerivedData/Pantheon-cqmfovbfsjnwlzdvjocpxwkyoofe/Build/Intermediates.noindex/Pantheon.build/Debug-xros/Pantheon.build/Objects-normal/arm64/ToolRegistry.stringsdata'
+    note: Target 'Pantheon' (project 'Pantheon') has Swift tasks not blocking downstream targets
+    note: Target 'Pantheon' (project 'Pantheon') has Swift tasks not blocking downstream targets
+error: Multiple commands produce '/Users/mike/Library/Developer/Xcode/DerivedData/Pantheon-cqmfovbfsjnwlzdvjocpxwkyoofe/Build/Intermediates.noindex/Pantheon.build/Debug-xros/Pantheon.build/Objects-normal/arm64/Tool.stringsdata'
+    note: Target 'Pantheon' (project 'Pantheon') has Swift tasks not blocking downstream targets
+    note: Target 'Pantheon' (project 'Pantheon') has Swift tasks not blocking downstream targets
+        """
+        
+        # Use the mock error data for the subprocess call
+        with patch('subprocess.check_output') as mock_subprocess:
+            mock_subprocess.return_value = mock_error_data
+            
+            # Test the extraction
+            result = diagnostics.extract_diagnostics("TestProject1-abc123", include_warnings=True)
+            
+            # Verify we found at least the two generic errors
+            self.assertGreaterEqual(result["error_count"], 2, "Should find at least 2 errors in the generic error test data")
+            self.assertGreaterEqual(len(result["errors"]), 2, "Should have at least 2 error objects in the errors list")
+            
+            # Check that we found the generic 'Multiple commands produce' errors
+            found_errors = 0
+            for error in result["errors"]:
+                if (error["type"] == "error" and 
+                    "Multiple commands produce" in error["message"]):
+                    found_errors += 1
+            
+            self.assertGreaterEqual(found_errors, 2, "Should find at least 2 'Multiple commands produce' errors")
 
 
 if __name__ == '__main__':
