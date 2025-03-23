@@ -1,0 +1,6 @@
+/Users/mike/src/Pantheon/Pantheon/Core/Cortex/Cortex.swift:543:9: error: variable already has a getter
+        get {
+        ^
+/Users/mike/src/Pantheon/Pantheon/Core/Cortex/Cortex.swift:538:9: note: previous definition of getter here
+        get async {
+        ^
