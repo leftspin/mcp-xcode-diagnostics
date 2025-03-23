@@ -314,7 +314,9 @@ class XcodeDiagnostics:
                         "main_pattern", "alt_pattern", "swift_getter_pattern", "swift_error_pattern",
                         "concurrency_pattern", "backup_concurrency_pattern"
                     ],
-                    "direct_extraction_used": True
+                    "direct_extraction_used": True,
+                    "getter_error_detected": "variable already has a getter" in str(concurrency_warning_lines) or 
+                                           any("variable already has a getter" in str(error) for error in processed_errors)
                 }
             }
         }
