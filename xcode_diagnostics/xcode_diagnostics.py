@@ -71,39 +71,45 @@ class XcodeDiagnostics:
         if not os.path.exists(self.derived_data_path):
             return []
             
-        projects = []
-        project_dirs = glob.glob(f"{self.derived_data_path}/*")
+        # Use os.scandir which is more efficient than os.listdir + os.path.join
+        project_info = []
         
-        for project_dir in project_dirs:
-            if os.path.isdir(project_dir):
-                # Extract project name from directory name
-                # Format is typically ProjectName-hash
-                dir_name = os.path.basename(project_dir)
-                parts = dir_name.split('-', 1)
+        # Collect projects with modification times for sorting
+        for entry in os.scandir(self.derived_data_path):
+            if entry.is_dir():
+                dir_name = entry.name
                 
-                project_name = parts[0] if len(parts) > 0 else dir_name
+                # Extract project name from directory name (ProjectName-hash format)
+                parts = dir_name.split('-', 1)
+                project_name = parts[0] if parts else dir_name
                 
                 # Check if it has Logs/Build directory
-                build_logs_dir = os.path.join(project_dir, "Logs", "Build")
+                build_logs_dir = os.path.join(entry.path, "Logs", "Build")
                 has_build_logs = os.path.exists(build_logs_dir)
                 
-                # Get latest modification time for the directory
+                # Get modification time for sorting
                 try:
-                    mtime = os.path.getmtime(project_dir)
-                    last_modified = datetime.fromtimestamp(mtime).isoformat()
+                    # entry.stat() is more efficient than os.path.getmtime
+                    mtime = entry.stat().st_mtime
                 except:
-                    last_modified = None
+                    mtime = 0  # Default to oldest if we can't get mtime
                 
-                projects.append({
-                    "project_name": project_name,
-                    "directory_name": dir_name,
-                    "full_path": project_dir,
-                    "has_build_logs": has_build_logs,
-                    "last_modified": last_modified
-                })
+                # Store all the info we need
+                project_info.append((
+                    mtime, 
+                    {
+                        "project_name": project_name,
+                        "directory_name": dir_name,
+                        "full_path": entry.path,
+                        "has_build_logs": has_build_logs,
+                        "last_modified": datetime.fromtimestamp(mtime).isoformat()
+                    }
+                ))
         
-        # Sort by modification time (most recent first)
-        projects.sort(key=lambda x: x.get("last_modified", ""), reverse=True)
+        # Sort by modification time (most recent first) and extract just the project dictionaries
+        project_info.sort(reverse=True, key=lambda x: x[0])
+        projects = [info[1] for info in project_info]
+        
         return projects
     
     def get_latest_build_log(self, project_dir_name: str) -> Optional[str]:
@@ -150,8 +156,91 @@ class XcodeDiagnostics:
                 "warnings": []
             }
         
-        # Extract data from gzipped log file
+        logger.debug(f"Processing log file: {log_file}")
+        logger.debug(f"Project directory: {project_dir_name}")
+        
+        # Use a direct grep approach first to check for common error patterns
+        # This is a fallback mechanism to ensure we don't miss critical errors
+        direct_errors = []
+        try:
+            # Look directly for common error patterns using grep
+            error_patterns = [
+                "error:", 
+                "variable already has a getter",
+                "previous definition"
+            ]
+            
+            for pattern in error_patterns:
+                try:
+                    cmd = f"gunzip -c '{log_file}' | grep -A 2 -B 2 '{pattern}'"
+                    grep_result = subprocess.check_output(cmd, shell=True, encoding='latin-1', stderr=subprocess.DEVNULL)
+                    if pattern in grep_result:
+                        logger.debug(f"Found '{pattern}' in build log using direct grep")
+                        logger.debug(f"Context: {grep_result[:500]}...")  # Log just the first 500 chars
+                        
+                        # Save this raw data to aid in debugging
+                        with open(f'/tmp/xcode-diagnostic-{pattern.replace(":", "")}.log', 'w') as f:
+                            f.write(grep_result)
+                        
+                        # For the getter error specifically, try to parse and create direct diagnostic issues
+                        if pattern == "variable already has a getter":
+                            lines = grep_result.split('\n')
+                            for line in lines:
+                                if "variable already has a getter" in line:
+                                    # Try to extract file, line and column information
+                                    getter_match = re.search(r'([^:]+\.swift):(\d+):(\d+): error: variable already has a getter', line)
+                                    if getter_match:
+                                        file_path = getter_match.group(1)
+                                        line_number = int(getter_match.group(2))
+                                        column = int(getter_match.group(3))
+                                        
+                                        # Create a direct diagnostic for this error
+                                        direct_error = DiagnosticIssue(
+                                            type="error",
+                                            message="variable already has a getter",
+                                            file_path=file_path,
+                                            line_number=line_number,
+                                            column=column
+                                        )
+                                        
+                                        # Look for the related note about previous definition
+                                        for note_line in lines:
+                                            if "previous definition of getter" in note_line and file_path in note_line:
+                                                note_match = re.search(r'([^:]+\.swift):(\d+):(\d+): note: previous definition of getter here', note_line)
+                                                if note_match:
+                                                    note_file = note_match.group(1)
+                                                    note_line_num = int(note_match.group(2))
+                                                    note_column = int(note_match.group(3))
+                                                    
+                                                    note = {
+                                                        "type": "note",
+                                                        "message": "previous definition of getter here",
+                                                        "file_path": note_file,
+                                                        "line_number": note_line_num,
+                                                        "column": note_column,
+                                                        "suggested_fix": None,
+                                                        "code_context": None
+                                                    }
+                                                    
+                                                    direct_error.notes.append(note)
+                                        
+                                        # Add to our direct errors list
+                                        direct_errors.append(direct_error)
+                                        logger.debug(f"Created direct diagnostic for getter error at {file_path}:{line_number}")
+                                    
+                except Exception as e:
+                    logger.debug(f"Error searching for '{pattern}': {str(e)}")
+        except Exception as e:
+            logger.debug(f"Error during direct grep search: {str(e)}")
+            
+        # Extract data from gzipped log file using our main parser
         issues = self._parse_log_file(log_file, include_warnings)
+        
+        # Add any direct errors we found to the main issues list
+        if direct_errors:
+            logger.debug(f"Adding {len(direct_errors)} direct errors to the issues list")
+            # Merge direct errors with issues found by the main parser
+            issues.extend(direct_errors)
         
         # Enhanced search for concurrency-related warnings
         if include_warnings:
@@ -228,8 +317,12 @@ class XcodeDiagnostics:
                 "concurrency_warning_context": concurrency_warning_lines[:20] if concurrency_warning_lines else [],
                 "parsing_info": {
                     "patterns_used": [
-                        "main_pattern", "alt_pattern", "concurrency_pattern", "backup_concurrency_pattern"
-                    ]
+                        "main_pattern", "alt_pattern", "swift_getter_pattern", "swift_error_pattern",
+                        "concurrency_pattern", "backup_concurrency_pattern"
+                    ],
+                    "direct_extraction_used": True,
+                    "getter_error_detected": "variable already has a getter" in str(concurrency_warning_lines) or 
+                                           any("variable already has a getter" in str(error) for error in processed_errors)
                 }
             }
         }
@@ -258,41 +351,106 @@ class XcodeDiagnostics:
                 f.write(output)
             logger.debug(f"Saved raw log output to {debug_log_file}")
             
-            # Look for specific warning categories that are commonly missed
-            search_terms = ["concurrency-safe", "global shared", "Swift 6", "Expected '{'", "actor isolation"]
-            for term in search_terms:
-                if term in output:
-                    line_indexes = [i for i, line in enumerate(output.split('\n')) if term in line]
-                    logger.debug(f"Found search term '{term}' in lines: {line_indexes}")
-                    # Extract the surrounding context to help debug the regex
+            # Enhanced debug approach - search for all error/warning/note lines directly
+            # This helps catch any diagnostic format we might miss with our patterns
+            diagnostic_indicators = [": error:", ": warning:", ": note:"]
+            for indicator in diagnostic_indicators:
+                if indicator in output:
+                    line_indexes = [i for i, line in enumerate(output.split('\n')) if indicator in line]
+                    logger.debug(f"Found diagnostic indicator '{indicator}' in {len(line_indexes)} lines")
+                    
+                    # Direct extraction - immediately capture all these lines as issues
+                    # This ensures we don't miss any diagnostics, regardless of format
+                    lines = output.split('\n')
                     for idx in line_indexes:
-                        lines = output.split('\n')
-                        start = max(0, idx - 5)
-                        end = min(len(lines), idx + 5)
+                        line = lines[idx]
+                        # Try to extract information using a more permissive pattern
+                        simple_pattern = r'([^:]+):(\d+)(?::(\d+))?: (error|warning|note): (.+)'
+                        direct_match = re.search(simple_pattern, line)
+                        
+                        if direct_match:
+                            # Extract diagnostic information
+                            file_path = direct_match.group(1)
+                            line_number = int(direct_match.group(2))
+                            column = int(direct_match.group(3)) if direct_match.group(3) else 1
+                            issue_type = direct_match.group(4)
+                            message = direct_match.group(5).strip()
+                            
+                            # Skip warnings if not requested
+                            if issue_type == 'warning' and not include_warnings:
+                                continue
+                                
+                            # Skip notes as standalone issues (they'll be attached to their parent issues)
+                            if issue_type == 'note':
+                                continue
+                                
+                            logger.debug(f"Direct extraction: {file_path}:{line_number} - {issue_type}: {message}")
+                            
+                            # Look for context - the next line might be code
+                            code_context = None
+                            if idx + 1 < len(lines) and not any(ind in lines[idx+1] for ind in diagnostic_indicators):
+                                code_context = lines[idx+1].strip()
+                            
+                            # Create diagnostic instance
+                            # Notes will be handled separately during the main processing loop
+                            if issue_type in ['error', 'warning']:
+                                new_issue = DiagnosticIssue(
+                                    type=issue_type,
+                                    message=message,
+                                    file_path=file_path,
+                                    line_number=line_number,
+                                    column=column,
+                                    code=code_context
+                                )
+                                
+                                # Check if this issue is already captured to avoid duplicates
+                                # Simple deduplication based on file, line, and message
+                                duplicate = False
+                                for existing in issues:
+                                    if (existing.file_path == file_path and 
+                                        existing.line_number == line_number and
+                                        existing.message == message):
+                                        duplicate = True
+                                        break
+                                
+                                if not duplicate:
+                                    issues.append(new_issue)
+                    
+                    # Log a sample of diagnostic lines to help debug regex patterns
+                    sample_size = min(10, len(line_indexes))
+                    for idx in line_indexes[:sample_size]:
+                        line = lines[idx]
+                        logger.debug(f"Sample diagnostic line: {line}")
+                        
+                        # Extract surrounding context for debugging
+                        start = max(0, idx - 3)
+                        end = min(len(lines), idx + 3)
                         context = '\n'.join(lines[start:end])
-                        logger.debug(f"Context for '{term}' at line {idx}:\n{context}")
+                        logger.debug(f"Context for diagnostic at line {idx}:\n{context}")
             
             # Pattern for concurrency-related warnings in Swift files 
             concurrency_pattern = r'([^:]+\.swift):(\d+):(\d+): (warning): (.+(?:concurrency-safe|global shared|Swift 6|nonisolated).+)'
             # Backup pattern for any type of concurrency warning
             backup_concurrency_pattern = r'([^:]+):(\d+):(\d+): (warning): (.+(?:concurrency|thread safety|isolation|actor).+)'
+            # Pattern for Swift-specific errors like duplicate getters
+            swift_getter_pattern = r'([^:]+\.swift):(\d+):(\d+): (error): (variable already has a getter)'
+            # General Swift error pattern (more permissive than the main pattern)
+            swift_error_pattern = r'([^:]+\.swift):(\d+):(\d+): (error|warning|note): (.+)'
             
-            # Look for missed concurrency-related warnings in the logs
-            concurrency_keywords = [
-                "concurrency-safe", "nonisolated global", "Swift 6 language mode", 
-                "thread safety", "actor isolation", "sendable"
-            ]
+            # Debug logging for checking raw lines from the log that contain diagnostics
+            # This is to ensure we're capturing everything without relying on specific keywords
+            swift_file_pattern = r'\.swift:'
+            diagnostic_types = ["error:", "warning:", "note:"]
             
-            # Debug logging for concurrency warnings
             for line in output.split('\n'):
-                for keyword in concurrency_keywords:
-                    if keyword in line and ".swift:" in line:
-                        logger.debug(f"Found potential concurrency warning: {line}")
-                        # Check if our enhanced regex patterns will catch this
-                        if re.search(concurrency_pattern, line) or re.search(backup_concurrency_pattern, line):
-                            logger.debug("This will be caught by our regex patterns")
-                        else:
-                            logger.debug("WARNING: This might be missed by our regex patterns")
+                # Check if this looks like a diagnostic line for a Swift file
+                if re.search(swift_file_pattern, line):
+                    for diag_type in diagnostic_types:
+                        if diag_type in line:
+                            logger.debug(f"Found Swift file diagnostic: {line}")
+                            # Check if our regex patterns will catch this
+                            if not re.search(r'([^:]+):(\d+):(\d+): (error|warning|note):', line):
+                                logger.debug("WARNING: This diagnostic might be missed by our regex patterns")
             
             # Split the output into lines for processing
             lines = output.split('\n')
@@ -309,11 +467,17 @@ class XcodeDiagnostics:
                 # /path/to/file.swift:10:15: error: use of unresolved identifier 'foo'
                 # /path/to/file.swift:20:5: warning: variable declared but never used
                 # Also handle other error formats like "Expected '{'"
-                main_pattern = r'([^:]+):(\d+):(\d+): (error|warning): ([^\n]+)'
-                # Alternative pattern for other error formats like "Expected '{'"
-                alt_pattern = r'([^:]+):(\d+): (error|warning): (expected .+)'
+                # And errors like "variable already has a getter"
+                
+                # Main pattern for standard errors/warnings with file:line:column format
+                main_pattern = r'([^:]+):(\d+):(\d+): (error|warning|note): ([^\n]+)'
+                
+                # Alternative pattern for older format errors (no column)
+                alt_pattern = r'([^:]+):(\d+): (error|warning|note): ([^\n]+)'
+                
                 # Pattern for concurrency-related warnings in Swift files (capturing full message)
                 concurrency_pattern = r'([^:]+\.swift):(\d+):(\d+): (warning): (.+(?:concurrency-safe|global shared|Swift 6|nonisolated).+)'
+                
                 # Backup pattern for any type of concurrency warning that might be formatted differently
                 backup_concurrency_pattern = r'([^:]+):(\d+):(\d+): (warning): (.+(?:concurrency|thread safety|isolation|actor).+)'
                 
@@ -329,35 +493,94 @@ class XcodeDiagnostics:
                         message = alt_match.group(4).strip()
                         match = True  # Set match to True to indicate we found something
                     else:
-                        # Try the concurrency pattern first (more specific for Swift files)
-                        concurrency_match = re.search(concurrency_pattern, line)
-                        if concurrency_match:
-                            file_path = concurrency_match.group(1)
-                            line_number = int(concurrency_match.group(2))
-                            column = int(concurrency_match.group(3))
-                            issue_type = concurrency_match.group(4)
-                            message = concurrency_match.group(5).strip()
+                        # Try the Swift getter specific pattern first
+                        getter_match = re.search(swift_getter_pattern, line)
+                        if getter_match:
+                            file_path = getter_match.group(1)
+                            line_number = int(getter_match.group(2))
+                            column = int(getter_match.group(3))
+                            issue_type = getter_match.group(4)
+                            message = getter_match.group(5).strip()
                             match = True
                             
                             # Add a debug log for this case
-                            logger.debug(f"Found Swift concurrency warning: {file_path}:{line_number}")
+                            logger.debug(f"Found Swift getter error: {file_path}:{line_number}")
                             logger.debug(f"Message: {message}")
                             logger.debug(f"Original line: {line}")
                         else:
-                            # Try the backup concurrency pattern (for other concurrency issues)
-                            backup_match = re.search(backup_concurrency_pattern, line)
-                            if backup_match:
-                                file_path = backup_match.group(1)
-                                line_number = int(backup_match.group(2))
-                                column = int(backup_match.group(3))
-                                issue_type = backup_match.group(4)
-                                message = backup_match.group(5).strip()
+                            # Try the general Swift error pattern
+                            swift_match = re.search(swift_error_pattern, line)
+                            if swift_match:
+                                file_path = swift_match.group(1)
+                                line_number = int(swift_match.group(2))
+                                column = int(swift_match.group(3))
+                                issue_type = swift_match.group(4)
+                                message = swift_match.group(5).strip()
                                 match = True
                                 
                                 # Add a debug log for this case
-                                logger.debug(f"Found backup concurrency warning: {file_path}:{line_number}")
-                                logger.debug(f"Message: {message}")
+                                logger.debug(f"Found general Swift diagnostic: {file_path}:{line_number}")
+                                logger.debug(f"Type: {issue_type}, Message: {message}")
                                 logger.debug(f"Original line: {line}")
+                            else:
+                                # Try the concurrency pattern (more specific for Swift files)
+                                concurrency_match = re.search(concurrency_pattern, line)
+                                if concurrency_match:
+                                    file_path = concurrency_match.group(1)
+                                    line_number = int(concurrency_match.group(2))
+                                    column = int(concurrency_match.group(3))
+                                    issue_type = concurrency_match.group(4)
+                                    message = concurrency_match.group(5).strip()
+                                    match = True
+                                    
+                                    # Add a debug log for this case
+                                    logger.debug(f"Found Swift concurrency warning: {file_path}:{line_number}")
+                                    logger.debug(f"Message: {message}")
+                                    logger.debug(f"Original line: {line}")
+                                else:
+                                    # Try the backup concurrency pattern (for other concurrency issues)
+                                    backup_match = re.search(backup_concurrency_pattern, line)
+                                    if backup_match:
+                                        file_path = backup_match.group(1)
+                                        line_number = int(backup_match.group(2))
+                                        column = int(backup_match.group(3))
+                                        issue_type = backup_match.group(4)
+                                        message = backup_match.group(5).strip()
+                                        match = True
+                                        
+                                        # Add a debug log for this case
+                                        logger.debug(f"Found backup concurrency warning: {file_path}:{line_number}")
+                                        logger.debug(f"Message: {message}")
+                                        logger.debug(f"Original line: {line}")
+                                    else:
+                                        # Generic fallback patterns for any errors/warnings that don't match our specific patterns
+                                        # These will capture errors like "error: Multiple commands produce ..." without requiring file:line format
+                                        fallback_error_pattern = r'^error: (.+)'
+                                        fallback_warning_pattern = r'^warning: (.+)'
+                                        
+                                        fallback_error_match = re.search(fallback_error_pattern, line)
+                                        if fallback_error_match:
+                                            file_path = "unknown"  # No file path in this format
+                                            line_number = 0        # No line number
+                                            column = 0             # No column
+                                            issue_type = "error"
+                                            message = fallback_error_match.group(1).strip()
+                                            match = True
+                                            
+                                            logger.debug(f"Found generic error: {message}")
+                                            logger.debug(f"Original line: {line}")
+                                        else:
+                                            fallback_warning_match = re.search(fallback_warning_pattern, line)
+                                            if fallback_warning_match:
+                                                file_path = "unknown"  # No file path in this format
+                                                line_number = 0        # No line number
+                                                column = 0             # No column
+                                                issue_type = "warning"
+                                                message = fallback_warning_match.group(1).strip()
+                                                match = True
+                                                
+                                                logger.debug(f"Found generic warning: {message}")
+                                                logger.debug(f"Original line: {line}")
                     
                 if match:
                     # For standard pattern
@@ -368,6 +591,36 @@ class XcodeDiagnostics:
                         issue_type = match.group(4)
                         message = match.group(5).strip()
                     # We already set these variables for the alternative pattern
+                    
+                    # If this is a note, we'll handle it differently - we may need to associate it with a previous error
+                    if issue_type == 'note':
+                        # Look for an existing diagnostic that this note might be related to
+                        related_diagnostic = None
+                        for issue in issues:
+                            # Check if this note is about the same file
+                            if issue.file_path == file_path:
+                                # Add as a note to the most recent diagnostic from the same file
+                                related_diagnostic = issue
+                        
+                        if related_diagnostic:
+                            # This is a note that belongs to a previous diagnostic
+                            note = {
+                                "type": issue_type,
+                                "message": message,
+                                "file_path": file_path,
+                                "line_number": line_number,
+                                "column": column if 'column' in locals() else 1,
+                                "suggested_fix": None,
+                                "code_context": None
+                            }
+                            related_diagnostic.notes.append(note)
+                            # Move to the next line
+                            i += 1
+                            continue
+                        else:
+                            # If we can't find a related diagnostic, treat it as a standalone issue
+                            # This ensures we don't miss anything
+                            issue_type = "error"  # Convert note to error if standalone
                     
                     # Skip warnings if not requested
                     if issue_type == 'warning' and not include_warnings:
@@ -380,7 +633,7 @@ class XcodeDiagnostics:
                         message=message,
                         file_path=file_path,
                         line_number=line_number,
-                        column=column
+                        column=column if 'column' in locals() else 1
                     )
                     
                     # Look ahead for any associated notes, code context, and caret lines
@@ -397,8 +650,22 @@ class XcodeDiagnostics:
                         
                         # Check for a note line - these typically follow the main diagnostic
                         # Example: /path/to/file.swift:11:16: note: convert 'activityIdentifier' to a 'let' constant
-                        note_pattern = r'([^:]+):(\d+):(\d+): (note): ([^\n]+)'
-                        note_match = re.search(note_pattern, note_line)
+                        # Example: /path/to/file.swift:538:9: note: previous definition of getter here
+                        # We'll reuse the main pattern here since we've already added 'note' to it
+                        note_match = re.search(main_pattern, note_line)
+                        # Only consider it a note if it's actually a "note" type
+                        note_match = note_match if note_match and note_match.group(4) == 'note' else None
+                        
+                        # Debug any potential notes with important keywords to ensure we're capturing them
+                        if "previous definition" in note_line or "already has" in note_line:
+                            logger.debug(f"Important note found: {note_line}")
+                            # Force the pattern to match if it's a valid note but our main pattern missed it
+                            if not note_match and re.search(r'([^:]+\.swift):(\d+):(\d+): note:', note_line):
+                                logger.debug("Forcing note match for important diagnostic")
+                                # Custom extraction for this special case
+                                parts = re.search(r'([^:]+\.swift):(\d+):(\d+): note: ([^\n]+)', note_line)
+                                if parts:
+                                    note_match = parts
                         
                         # Check for a fix-it line - these typically include suggested code changes
                         # Example: static var activityIdentifier
@@ -417,8 +684,12 @@ class XcodeDiagnostics:
                             note_line_number = int(note_match.group(2))
                             note_column = int(note_match.group(3))
                             note_type = note_match.group(4)
-                            note_message = note_match.group(5).strip()
+                            note_message = note_match.group(5).strip() if len(note_match.groups()) >= 5 else "note"
                             
+                            # Log when we found an important diagnostic like "previous definition"
+                            if "previous definition" in note_message or "already has" in note_message:
+                                logger.debug(f"Found important relationship: {note_message}")
+                                
                             note = {
                                 "type": note_type,
                                 "message": note_message,
@@ -426,13 +697,20 @@ class XcodeDiagnostics:
                                 "line_number": note_line_number,
                                 "column": note_column,
                                 "suggested_fix": None,
-                                "code_context": None
+                                "code_context": None,
+                                "related_to_line": line_number,  # Store which diagnostic line this note relates to
+                                "related_to_file": file_path     # Store which file this note relates to
                             }
                             
                             # Check for code context for this note
                             context_key = f"{note_file_path}:{note_line_number}"
                             if context_key in current_code_context:
                                 note["code_context"] = current_code_context[context_key]
+                                
+                            # Store relationship data for error tracking
+                            if "previous definition" in note_message:
+                                # This creates a link between the current error and a note's location
+                                logger.debug(f"Linking current diagnostic at {file_path}:{line_number} to previous definition at {note_file_path}:{note_line_number}")
                             
                             # Look ahead for suggested fix
                             if j + 1 < len(lines):
@@ -458,14 +736,14 @@ class XcodeDiagnostics:
                             caret_line = note_line.rstrip()
                             
                             # If we haven't added the code context yet, do it now
-                            if not diagnostic.code and j > 0 and not re.search(main_pattern, lines[j-1]) and not re.search(note_pattern, lines[j-1]):
+                            if not diagnostic.code and j > 0 and not re.search(main_pattern, lines[j-1]):
                                 diagnostic.code = lines[j-1].rstrip()
                             
                             # Store the caret line
                             diagnostic.character_range = caret_line
                             
                             # Check if the next line is a fix suggestion
-                            if j + 1 < len(lines) and not re.search(main_pattern, lines[j+1]) and not re.search(note_pattern, lines[j+1]) and not re.search(fixit_pattern, lines[j+1]):
+                            if j + 1 < len(lines) and not re.search(main_pattern, lines[j+1]) and not re.search(fixit_pattern, lines[j+1]):
                                 j += 1
                                 fix_suggestion = lines[j].strip()
                                 # Create an implicit note for the fix suggestion
