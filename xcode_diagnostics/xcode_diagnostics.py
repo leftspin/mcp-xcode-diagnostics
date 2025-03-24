@@ -71,39 +71,45 @@ class XcodeDiagnostics:
         if not os.path.exists(self.derived_data_path):
             return []
             
-        projects = []
-        project_dirs = glob.glob(f"{self.derived_data_path}/*")
+        # Use os.scandir which is more efficient than os.listdir + os.path.join
+        project_info = []
         
-        for project_dir in project_dirs:
-            if os.path.isdir(project_dir):
-                # Extract project name from directory name
-                # Format is typically ProjectName-hash
-                dir_name = os.path.basename(project_dir)
-                parts = dir_name.split('-', 1)
+        # Collect projects with modification times for sorting
+        for entry in os.scandir(self.derived_data_path):
+            if entry.is_dir():
+                dir_name = entry.name
                 
-                project_name = parts[0] if len(parts) > 0 else dir_name
+                # Extract project name from directory name (ProjectName-hash format)
+                parts = dir_name.split('-', 1)
+                project_name = parts[0] if parts else dir_name
                 
                 # Check if it has Logs/Build directory
-                build_logs_dir = os.path.join(project_dir, "Logs", "Build")
+                build_logs_dir = os.path.join(entry.path, "Logs", "Build")
                 has_build_logs = os.path.exists(build_logs_dir)
                 
-                # Get latest modification time for the directory
+                # Get modification time for sorting
                 try:
-                    mtime = os.path.getmtime(project_dir)
-                    last_modified = datetime.fromtimestamp(mtime).isoformat()
+                    # entry.stat() is more efficient than os.path.getmtime
+                    mtime = entry.stat().st_mtime
                 except:
-                    last_modified = None
+                    mtime = 0  # Default to oldest if we can't get mtime
                 
-                projects.append({
-                    "project_name": project_name,
-                    "directory_name": dir_name,
-                    "full_path": project_dir,
-                    "has_build_logs": has_build_logs,
-                    "last_modified": last_modified
-                })
+                # Store all the info we need
+                project_info.append((
+                    mtime, 
+                    {
+                        "project_name": project_name,
+                        "directory_name": dir_name,
+                        "full_path": entry.path,
+                        "has_build_logs": has_build_logs,
+                        "last_modified": datetime.fromtimestamp(mtime).isoformat()
+                    }
+                ))
         
-        # Sort by modification time (most recent first)
-        projects.sort(key=lambda x: x.get("last_modified", ""), reverse=True)
+        # Sort by modification time (most recent first) and extract just the project dictionaries
+        project_info.sort(reverse=True, key=lambda x: x[0])
+        projects = [info[1] for info in project_info]
+        
         return projects
     
     def get_latest_build_log(self, project_dir_name: str) -> Optional[str]:
