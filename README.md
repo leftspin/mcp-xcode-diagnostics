@@ -4,7 +4,9 @@ An MCP (Model Control Protocol) plugin for extracting and viewing errors and war
 
 ## Overview
 
-This plugin implements the Model Control Protocol (MCP) specification to provide Xcode diagnostics functionality to any compatible AI assistants. It connects to Xcode's build system to extract, parse, and display diagnostics (errors and warnings) from your Swift projects. It helps AI assistants quickly identify issues in your code without having to manually search through build logs.
+This plugin implements the Model Control Protocol (MCP) specification to provide Xcode diagnostics functionality to any compatible AI assistants. It connects to Xcode's build system to extract, parse, and display diagnostics (errors and warnings) from your Swift projects. It helps AI assistants quickly identify issues in your code without having to manually search through build logs. 
+
+Note that since this works at the log level, Xcode must have already attempted a build before you run this tool. 
 
 ## Prerequisites
 
